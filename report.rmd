@@ -1,0 +1,296 @@
+---
+title: "Practical Machine Learning Project - Quantified Self Movement Data Analysis Report"
+author: "Bhaskar Bandaru"
+date: "24 October 2015"
+output: html_document
+---
+
+##  Introduction
+
+### Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+
+### Goal
+
+The goal of the project is to predict the manner in which they did the exercise. This is the “classe” variable in the training set usung any of the other variables to predict with. This report describing how I built  model, how I used cross validation, the expected out of sample error  and why the choices are made . At the end  prediction model is used to predict 20 different test cases.
+
+## Abstract
+
+In this work ([see the paper](http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201)) 
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). 
+
+The wearable devices (Belt, Glove and Armband sensors) on athlete’s body provides the on-body sensing along with the Dumbbell sensors provides the schema to collect the quantitative data related to these excercises. Selecting the appropriate analytical data and analying these data features would provide a right classification of these excercise. 
+
+For the Analysis of this data practical machine learning algorithm using the Random Forrest Method has been used (after performing some inital analysis using various mathods available in the caret R package Linear Regression, Boosting , Randomg Forrest - Random Forrest method has been selected for the accuracy and less variance and avoid the complexity of ensembling of classifiers). 
+
+The RF method is used to fit the model for the learning data (70% of the training set is used as the learing data) and then the modelfit is tested/validated by classifying the remaining data with almost 99% accuracy. Once the modelfit is validated the model has been used to predict the classification for the Test data provided for this project.
+
+The predicted results are submitted as indicated by the course project work web site. 
+
+## Getting and Loading the Data
+
+### Data
+
+The training data are available [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+
+The test data are available [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+Please note that the data for this project come from this [source](http://groupware.les.inf.puc-rio.br/har). 
+
+Both the Training data and 
+
+
+```{r, start, echo=FALSE}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+library(randomForest)
+library(corrgram)
+library(recommenderlab)
+library(knitr)
+```
+
+### Data Download 
+```{r, init}
+trainUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+trainFile <- "./data/pml-training.csv"
+testFile  <- "./data/pml-testing.csv"
+if (!file.exists("./data")) {
+  dir.create("./data")
+}
+# The method "curl" is required for Mac computers
+if (!file.exists(trainFile)) {
+  download.file(trainUrl, destfile=trainFile, method="curl")
+}
+if (!file.exists(testFile)) {
+  download.file(testUrl, destfile=testFile, method="curl")
+}
+
+```
+
+### Read and Explore the Data
+
+After downloading the data to local directory the data is read to the local session variables as data frames and perfomed the initial exploratory data analysis
+
+```{r, load }
+# training data
+trainDataRaw <- read.csv("./data/pml-training.csv")
+
+# test data 
+testDataRaw <- read.csv("./data/pml-testing.csv")
+
+# perform initial data exploratory analysis
+dim(trainDataRaw)
+dim(testDataRaw)
+
+head(names(trainDataRaw))
+head(names(testDataRaw)) 
+# Appears that first few variables [1:5] are not required for the initial analysis 
+```
+
+### Cleaning the Data
+
+First we would remove the first 5 [1:5] variables from the Training data set
+
+```{r, clean }
+# training data
+trainDataRaw <- trainDataRaw[,-(1:5)]
+
+# test data 
+testDataRaw <- testDataRaw[,-(1:5)]
+
+# check the dimensions
+dim(trainDataRaw)
+dim(testDataRaw)
+
+```
+
+Now the training data is partioned for learining purpose for the model fit and validation data for the model
+
+```{r, separate }
+# set the seed for the repeatability of the result
+set.seed(654321)
+
+# partiition the training data 70% for the training and 30% for the validation of the model
+
+inTrain <- createDataPartition(y=trainDataRaw$classe, p = 0.7, list = FALSE)
+
+trainingData <- trainDataRaw[inTrain,]
+validationData <- trainDataRaw[-inTrain,]
+
+
+dim(trainingData)
+dim(validationData)
+
+```
+
+### Features/Predictors selections
+
+Now the Featrures/varibales need to be reduced/optimised for the model performance and accuracy
+
+```{r, reduction }
+# clear the near zero values 
+nearToZero <- nearZeroVar(trainingData)
+trainingData <- trainingData[, -nearToZero]
+validationData <- validationData[, -nearToZero]
+
+# now remove variables that are almost always NA
+mostLikelyNA <- sapply(trainingData, function(x) mean(is.na(x))) > 0.95
+trainingData <- trainingData[, mostLikelyNA==FALSE]
+validationData <- validationData[, mostLikelyNA==FALSE]
+
+# Now some more feature reduction based on the correlation among predictors
+# calculate correlation matrix
+correlationMatrix <- cor(trainingData[,1:53])
+
+# find attributes that are highly correlated (ideally >0.75) but we go for 95%
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.95)
+# print indexes of highly correlated attributes
+print(highlyCorrelated)
+
+#Now remove these features from the data
+trainingDataClean <- trainingData[, -highlyCorrelated]
+validationDataClean <- validationData[, -highlyCorrelated]
+
+```
+
+Now it is good to have  a feature plot for the hgihgly correlated features
+```{r , plot1, echo=FALSE}
+p1 <- featurePlot(x=trainingData[,highlyCorrelated], y=trainingData$classe, plot="pairs")
+print(p1)
+
+```
+
+### Model Selection
+
+##### Now try with the rpart with the method is class
+```{r , model1 }
+set.seed(123456)
+modFitClass <- rpart(classe ~ ., data=trainingDataClean, method="class")
+plot2 <- fancyRpartPlot(modFitClass)
+print (plot2)
+```
+
+##### Prediction with Decision Trees
+
+```{r , predict1}
+
+predictionsClass <- predict(modFitClass, validationDataClean, type="class")
+ClassModeltree <- confusionMatrix(predictionsClass, validationDataClean$classe)
+ClassModeltree
+```
+
+From the above output of Confusion Matrix the accuracy of the prediction with this method is detailed below:
+
+```{r , accuracy1, echo=FALSE}
+print(paste("Decision Tree Confusion Matrix: Accuracy =", round(ClassModeltree$overall['Accuracy'], 4)))
+
+```
+
+##### Now try with the Random Forrect method
+
+
+```{r , model2}
+
+controlRf <- trainControl(method="cv", number = 5, verboseIter=FALSE)
+modelRf <- train(classe ~ ., data=trainingDataClean, method="rf", trControl=controlRf)
+modelRf$finalModel
+```
+
+
+##### Prediction with Random Forrest Tree
+
+```{r , predict2}
+
+predictionsRf <- predict(modelRf, newdata = validationDataClean)
+RfModelResult <- confusionMatrix(predictionsRf, validationDataClean$classe)
+RfModelResult
+```
+
+From the above output of Confusion Matrix the accuracy of this model is better than the previous method:
+
+```{r , accuracy2, echo=FALSE}
+print(paste("Random Forrest Model Prediction Confusion Matrix: Accuracy =", round(RfModelResult$overall['Accuracy'], 4)))
+
+```
+
+Compared to the other models classificaiton the Random Forrest  model has better accuracy for classification and hence this RF model has been selected.
+
+Now we will generate some plots for this model fit
+
+```{r , plot3, echo=FALSE}
+plot(modelRf$finalModel, main = "Random Forrest Model Error Rate")
+
+
+```
+
+Accuracy of the Random Forrest Model fit
+
+```{r , plot4, echo=FALSE}
+
+plot(modelRf, ylim = c(0.96,1), main = "Random Forrest Model Accuracy")
+
+
+```
+
+### Predicting Results on the Test Data
+
+#### Test Data features/variables to be selected as per the training data set 
+
+
+
+```{r , result}
+
+# remove the classe variable from the list of Training data for the list of selected features
+featureList <- names(trainingDataClean)
+selectedFeatures <- names(trainingDataClean[,-length(featureList)])
+
+# remove the last variable the id from the test data set
+testData <- testDataRaw[,-length(names(testDataRaw))]
+
+testDataClean <- testData[,selectedFeatures]
+predictResult <- predict(modelRf, newdata = testDataClean)
+predictResult
+```
+
+
+```{r , submit, results='hold'}
+
+
+# convert predictions to character vector
+preds <- as.character(predictResult)
+
+# create function to write predictions to files
+pml_write_files <- function(x) {
+    n <- length(x)
+    for(i in 1:n) {
+        filename <- paste0("problem_id_", i, ".txt")
+        write.table(x[i], file=filename, quote=F, row.names=F, col.names=F)
+    }
+}
+
+# create prediction files to submit
+pml_write_files(preds)
+```
+
+### Conclusions
+Random Forest Model is relatively superior model for prediction of exercise quality compared to rpart. The RF model has nearly 99% accuracy and fitted well to other subsamples of the data. However, the algorithm may not have as high of accuracy on other samples, particularly ones with different subjects.
+
+Overall, it is interesting to consider how monitors are affected by the quality of an exercise and are able to predict the error made.
+
+#### Disclaimer/Acknowledgement
+
+Please note that the analysis is made as part of the course work and the research work has not  performed by me.
+The informatioan related to the actual work can be obtained from [here](http://groupware.les.inf.puc-rio.br/har).
+
+
+
+```{r ,  echo=FALSE}
+
+```
+
